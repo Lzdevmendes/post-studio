@@ -14,35 +14,38 @@ const TEMPLATES: { id: Template; label: string }[] = [
   { id: "citacao", label: "Citação" },
 ];
 
+type TextProvider = "pollinations" | "gemini" | "groq" | "openrouter" | "claude";
+type ImageProvider = "pollinations" | "huggingface" | "cloudflare" | "luma";
+
 type Settings = {
   handle: string;
   niche: string;
-  textProvider: "gemini" | "claude";
-  imageProvider: "pollinations" | "luma";
+  textProvider: TextProvider;
+  imageProvider: ImageProvider;
   anthropicKey: string;
   geminiKey: string;
   lumaKey: string;
   model: string;
 };
 
+// Chaves dos motores grátis novos — guardadas só na sessão (sem coluna no
+// banco ainda). Persisti-las exige uma migração no Supabase.
+type FreeKeys = {
+  groqKey: string;
+  openrouterKey: string;
+  hfKey: string;
+  cfAccountId: string;
+  cfToken: string;
+};
+
 type GenPost = Post & {
   bg?: string;
-  ogUrl?: string;
+  artUrl?: string;
   status: "pending" | "art" | "done" | "error";
   error?: string;
 };
 
 const DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"];
-
-function ogUrl(
-  p: { headline: string; subtitle: string; dia: string },
-  handle: string,
-  bg: string,
-  tpl: Template,
-) {
-  const q = new URLSearchParams({ headline: p.headline, subtitle: p.subtitle, dia: p.dia, handle, bg, tpl });
-  return `/api/og?${q.toString()}`;
-}
 
 export default function Studio({ email, initial }: { email: string; initial: Settings }) {
   const router = useRouter();
@@ -55,14 +58,41 @@ export default function Studio({ email, initial }: { email: string; initial: Set
   const [error, setError] = useState("");
   const [artStyle, setArtStyle] = useState<ArtStyle>("abstrato");
   const [template, setTemplate] = useState<Template>("padrao");
+  const [freeKeys, setFreeKeys] = useState<FreeKeys>({
+    groqKey: "",
+    openrouterKey: "",
+    hfKey: "",
+    cfAccountId: "",
+    cfToken: "",
+  });
 
-  const textReady = settings.textProvider === "gemini" ? !!settings.geminiKey : !!settings.anthropicKey;
-  const imageReady = settings.imageProvider === "pollinations" ? true : !!settings.lumaKey;
+  const textReady =
+    settings.textProvider === "pollinations"
+      ? true
+      : settings.textProvider === "gemini"
+        ? !!settings.geminiKey
+        : settings.textProvider === "groq"
+          ? !!freeKeys.groqKey
+          : settings.textProvider === "openrouter"
+            ? !!freeKeys.openrouterKey
+            : !!settings.anthropicKey;
+  const imageReady =
+    settings.imageProvider === "pollinations"
+      ? true
+      : settings.imageProvider === "huggingface"
+        ? !!freeKeys.hfKey
+        : settings.imageProvider === "cloudflare"
+          ? !!freeKeys.cfAccountId && !!freeKeys.cfToken
+          : !!settings.lumaKey;
   const ready = textReady && imageReady;
   const [openSettings, setOpenSettings] = useState(!ready);
 
   function set<K extends keyof Settings>(k: K, v: Settings[K]) {
     setSettings((s) => ({ ...s, [k]: v }));
+  }
+
+  function setFree<K extends keyof FreeKeys>(k: K, v: FreeKeys[K]) {
+    setFreeKeys((s) => ({ ...s, [k]: v }));
   }
 
   async function persist() {
@@ -95,7 +125,9 @@ export default function Studio({ email, initial }: { email: string; initial: Set
         hashtags: p.hashtags,
         image_prompt: p.image_prompt,
         source_url: p.source_url,
-        bg_url: p.bg,
+        // Só URLs hospedadas voltam a renderizar no histórico; data URIs
+        // (Hugging Face / Cloudflare) são grandes demais para guardar.
+        bg_url: p.bg?.startsWith("http") ? p.bg : null,
       }),
     });
   }
@@ -119,7 +151,13 @@ export default function Studio({ email, initial }: { email: string; initial: Set
           provider: settings.textProvider,
           anthropicKey: settings.anthropicKey,
           geminiKey: settings.geminiKey,
-          model: settings.model,
+          freeKey:
+            settings.textProvider === "groq"
+              ? freeKeys.groqKey
+              : settings.textProvider === "openrouter"
+                ? freeKeys.openrouterKey
+                : "",
+          model: settings.textProvider === "claude" ? settings.model : undefined,
           handle: settings.handle,
           niche: settings.niche,
         }),
@@ -138,25 +176,54 @@ export default function Studio({ email, initial }: { email: string; initial: Set
       for (let i = 0; i < initialPosts.length; i++) {
         setPosts((prev) => prev.map((p, idx) => (idx === i ? { ...p, status: "art" } : p)));
         try {
+          const post = initialPosts[i];
           let bg: string;
           if (settings.imageProvider === "pollinations") {
-            bg = pollinationsUrl(initialPosts[i].image_prompt, i + 1, artStyle);
-          } else {
+            bg = pollinationsUrl(post.image_prompt, i + 1, artStyle);
+          } else if (settings.imageProvider === "luma") {
             const lumaRes = await fetch("/api/luma", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ lumaKey: settings.lumaKey, prompt: initialPosts[i].image_prompt }),
+              body: JSON.stringify({ lumaKey: settings.lumaKey, prompt: post.image_prompt }),
             });
             const luma = await lumaRes.json();
             if (!lumaRes.ok) throw new Error(luma.error || "Luma falhou");
             bg = luma.url;
+          } else {
+            // huggingface / cloudflare devolvem bytes -> data URI
+            const imgRes = await fetch("/api/image", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                provider: settings.imageProvider,
+                prompt: post.image_prompt,
+                hfKey: freeKeys.hfKey,
+                cfAccountId: freeKeys.cfAccountId,
+                cfToken: freeKeys.cfToken,
+              }),
+            });
+            const img = await imgRes.json();
+            if (!imgRes.ok) throw new Error(img.error || "Falha ao gerar a imagem");
+            bg = img.dataUri;
           }
-          const done: GenPost = {
-            ...initialPosts[i],
-            bg,
-            ogUrl: ogUrl(initialPosts[i], settings.handle, bg, template),
-            status: "done",
-          };
+
+          // Compõe a arte no servidor (POST aceita data URI grande no corpo).
+          const ogRes = await fetch("/api/og", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              headline: post.headline,
+              subtitle: post.subtitle,
+              dia: post.dia,
+              handle: settings.handle,
+              bg,
+              tpl: template,
+            }),
+          });
+          if (!ogRes.ok) throw new Error("Falha ao compor a arte");
+          const artUrl = URL.createObjectURL(await ogRes.blob());
+
+          const done: GenPost = { ...post, bg, artUrl, status: "done" };
           setPosts((prev) => prev.map((p, idx) => (idx === i ? done : p)));
           savePost(done);
         } catch (e: any) {
@@ -172,19 +239,16 @@ export default function Studio({ email, initial }: { email: string; initial: Set
     }
   }
 
-  async function download(p: GenPost) {
-    if (!p.ogUrl) return;
-    const res = await fetch(p.ogUrl);
-    const blob = await res.blob();
+  function download(p: GenPost) {
+    if (!p.artUrl) return;
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = p.artUrl;
     a.download = `post-${p.dia}.png`;
     a.click();
-    URL.revokeObjectURL(a.href);
   }
 
   const doneCount = posts.filter((p) => p.status === "done").length;
-  const free = settings.textProvider === "gemini" && settings.imageProvider === "pollinations";
+  const free = settings.textProvider !== "claude" && settings.imageProvider !== "luma";
 
   return (
     <div className="w-full max-w-5xl mx-auto px-5 py-8">
@@ -228,15 +292,28 @@ export default function Studio({ email, initial }: { email: string; initial: Set
         {openSettings && (
           <div className="mt-5 grid sm:grid-cols-2 gap-4">
             {/* Motor de TEXTO */}
-            <Field label="Motor de texto" hint="Gemini é grátis · Claude é pago (melhor escrita)">
-              <select value={settings.textProvider} onChange={(e) => set("textProvider", e.target.value as Settings["textProvider"])} onBlur={persist} className="input">
-                <option value="gemini">Gemini — grátis</option>
+            <Field label="Motor de texto" hint="Pollinations não precisa de chave · Claude é pago (melhor escrita)">
+              <select value={settings.textProvider} onChange={(e) => set("textProvider", e.target.value as TextProvider)} onBlur={persist} className="input">
+                <option value="pollinations">Pollinations — grátis, sem chave</option>
+                <option value="gemini">Gemini — grátis (chave grátis)</option>
+                <option value="groq">Groq — grátis (chave grátis)</option>
+                <option value="openrouter">OpenRouter — grátis (chave grátis)</option>
                 <option value="claude">Claude — pago</option>
               </select>
             </Field>
-            {settings.textProvider === "gemini" ? (
+            {settings.textProvider === "pollinations" ? (
+              <div className="hidden sm:block" />
+            ) : settings.textProvider === "gemini" ? (
               <Field label="Chave do Gemini (grátis)" hint="aistudio.google.com → Get API key">
                 <input type={showKeys ? "text" : "password"} value={settings.geminiKey} onChange={(e) => set("geminiKey", e.target.value)} onBlur={persist} placeholder="AIza..." className="input" />
+              </Field>
+            ) : settings.textProvider === "groq" ? (
+              <Field label="Chave do Groq (grátis)" hint="console.groq.com → API Keys">
+                <input type={showKeys ? "text" : "password"} value={freeKeys.groqKey} onChange={(e) => setFree("groqKey", e.target.value)} placeholder="gsk_..." className="input" />
+              </Field>
+            ) : settings.textProvider === "openrouter" ? (
+              <Field label="Chave do OpenRouter (grátis)" hint="openrouter.ai → Keys · usa modelos :free">
+                <input type={showKeys ? "text" : "password"} value={freeKeys.openrouterKey} onChange={(e) => setFree("openrouterKey", e.target.value)} placeholder="sk-or-..." className="input" />
               </Field>
             ) : (
               <Field label="Chave do Claude (Anthropic)" hint="console.claude.com → API keys (precisa de créditos)">
@@ -245,9 +322,11 @@ export default function Studio({ email, initial }: { email: string; initial: Set
             )}
 
             {/* Motor de IMAGEM */}
-            <Field label="Motor de imagem" hint="Pollinations é grátis · Luma é paga (mais polida)">
-              <select value={settings.imageProvider} onChange={(e) => set("imageProvider", e.target.value as Settings["imageProvider"])} onBlur={persist} className="input">
-                <option value="pollinations">Pollinations — grátis</option>
+            <Field label="Motor de imagem" hint="Pollinations não precisa de chave · Luma é paga (mais polida)">
+              <select value={settings.imageProvider} onChange={(e) => set("imageProvider", e.target.value as ImageProvider)} onBlur={persist} className="input">
+                <option value="pollinations">Pollinations — grátis, sem chave</option>
+                <option value="huggingface">Hugging Face FLUX — grátis (chave grátis)</option>
+                <option value="cloudflare">Cloudflare FLUX — grátis (chave grátis)</option>
                 <option value="luma">Luma (UNI) — paga</option>
               </select>
             </Field>
@@ -255,6 +334,19 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               <Field label="Chave da Luma (UNI)" hint="lumalabs.ai → API keys">
                 <input type={showKeys ? "text" : "password"} value={settings.lumaKey} onChange={(e) => set("lumaKey", e.target.value)} onBlur={persist} placeholder="luma-..." className="input" />
               </Field>
+            ) : settings.imageProvider === "huggingface" ? (
+              <Field label="Token do Hugging Face (grátis)" hint="huggingface.co/settings/tokens">
+                <input type={showKeys ? "text" : "password"} value={freeKeys.hfKey} onChange={(e) => setFree("hfKey", e.target.value)} placeholder="hf_..." className="input" />
+              </Field>
+            ) : settings.imageProvider === "cloudflare" ? (
+              <>
+                <Field label="Account ID do Cloudflare" hint="dash.cloudflare.com → Workers AI">
+                  <input value={freeKeys.cfAccountId} onChange={(e) => setFree("cfAccountId", e.target.value)} placeholder="ex.: 0a1b2c..." className="input" />
+                </Field>
+                <Field label="API Token do Cloudflare (grátis)" hint="permissão Workers AI">
+                  <input type={showKeys ? "text" : "password"} value={freeKeys.cfToken} onChange={(e) => setFree("cfToken", e.target.value)} placeholder="token..." className="input" />
+                </Field>
+              </>
             ) : (
               <div className="hidden sm:block" />
             )}
@@ -301,8 +393,10 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               mostrar chaves
             </label>
             <p className="text-xs text-muted sm:col-span-2">
-              No modo grátis (Gemini + Pollinations) você não paga nada — só precisa de
-              uma chave grátis do Gemini. Suas chaves ficam salvas só na sua conta.
+              Modo 100% sem chave: Pollinations no texto + Pollinations na imagem — não
+              precisa cadastrar nada. Gemini, Groq, OpenRouter, Hugging Face e Cloudflare
+              também são grátis (só pedem uma chave grátis). Chaves do Claude/Gemini/Luma
+              ficam salvas na sua conta; as dos motores grátis novos valem só nesta sessão.
             </p>
           </div>
         )}
@@ -328,9 +422,9 @@ export default function Studio({ email, initial }: { email: string; initial: Set
         {posts.map((p, i) => (
           <article key={i} className="rounded-2xl border border-border bg-surface overflow-hidden flex flex-col">
             <div className="aspect-[4/5] bg-surface-2 relative">
-              {p.status === "done" && p.ogUrl ? (
+              {p.status === "done" && p.artUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={p.ogUrl} alt={p.headline} className="w-full h-full object-cover" />
+                <img src={p.artUrl} alt={p.headline} className="w-full h-full object-cover" />
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center mono text-xs text-muted">
                   {p.status === "art" && <Spinner label={`gerando ${p.dia}…`} />}
