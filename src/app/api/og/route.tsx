@@ -18,6 +18,8 @@ const mono = readFileSync(join(fontDir, "JetBrainsMono-Bold.ttf"));
 // deixava o post sem fundo), baixamos aqui no servidor com algumas tentativas
 // e devolvemos a imagem embutida como data URI — aí o fundo é garantido.
 async function loadBg(url: string): Promise<string | null> {
+  // Motores que devolvem bytes já mandam um data URI pronto — usa direto.
+  if (url.startsWith("data:")) return url;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const res = await fetch(url, { cache: "no-store" });
@@ -299,22 +301,27 @@ function content(
   );
 }
 
-export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const headline = searchParams.get("headline") || "Headline do post";
-    const subtitle = searchParams.get("subtitle") || "";
-    const dia = (searchParams.get("dia") || "segunda").toUpperCase();
-    const handle = searchParams.get("handle") || "@perfil";
-    const bgParam = searchParams.get("bg") || "";
-    const tplParam = (searchParams.get("tpl") || "padrao") as Tpl;
-    const tpl: Tpl = ["padrao", "centro", "citacao"].includes(tplParam)
-      ? tplParam
-      : "padrao";
+type ArtParams = {
+  headline: string;
+  subtitle: string;
+  dia: string;
+  handle: string;
+  bg: string;
+  tpl: string;
+};
 
-    const bg = bgParam ? await loadBg(bgParam) : null;
+async function render(params: ArtParams) {
+  const headline = params.headline || "Headline do post";
+  const subtitle = params.subtitle || "";
+  const dia = (params.dia || "segunda").toUpperCase();
+  const handle = params.handle || "@perfil";
+  const tpl: Tpl = ["padrao", "centro", "citacao"].includes(params.tpl)
+    ? (params.tpl as Tpl)
+    : "padrao";
 
-    return new ImageResponse(
+  const bg = params.bg ? await loadBg(params.bg) : null;
+
+  return new ImageResponse(
       (
         <div
           style={{
@@ -366,7 +373,40 @@ export async function GET(req: Request) {
           { name: "Mono", data: mono, weight: 700, style: "normal" },
         ],
       },
-    );
+  );
+}
+
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    return await render({
+      headline: searchParams.get("headline") || "",
+      subtitle: searchParams.get("subtitle") || "",
+      dia: searchParams.get("dia") || "",
+      handle: searchParams.get("handle") || "",
+      bg: searchParams.get("bg") || "",
+      tpl: searchParams.get("tpl") || "padrao",
+    });
+  } catch (e) {
+    return new Response(`Falha ao gerar a arte: ${(e as Error).message}`, {
+      status: 500,
+    });
+  }
+}
+
+// POST recebe o fundo no corpo (data URI dos motores que devolvem bytes, ou
+// uma URL) — assim não estoura o limite de tamanho da query string do GET.
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    return await render({
+      headline: body.headline || "",
+      subtitle: body.subtitle || "",
+      dia: body.dia || "",
+      handle: body.handle || "",
+      bg: body.bg || "",
+      tpl: body.tpl || "padrao",
+    });
   } catch (e) {
     return new Response(`Falha ao gerar a arte: ${(e as Error).message}`, {
       status: 500,
