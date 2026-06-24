@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 import { getNews } from "@/lib/news";
 import { curate } from "@/lib/curate";
 import { curateGemini } from "@/lib/curate-gemini";
+import { curateFree, type FreeTextProvider } from "@/lib/curate-free";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+const FREE_PROVIDERS: FreeTextProvider[] = ["pollinations", "groq", "openrouter"];
+
 export async function POST(req: Request) {
   try {
-    const { provider, anthropicKey, geminiKey, model, handle, niche } = await req.json();
+    const { provider, anthropicKey, geminiKey, freeKey, model, handle, niche } =
+      await req.json();
     const brand = {
       handle: handle || "@perfil",
       niche: niche || "tecnologia e desenvolvimento de software",
@@ -31,6 +35,8 @@ export async function POST(req: Request) {
         );
       }
       plan = await curateGemini(news, geminiKey, brand);
+    } else if (FREE_PROVIDERS.includes(provider)) {
+      plan = await curateFree(provider, news, freeKey || "", brand, model);
     } else {
       if (!anthropicKey) {
         return NextResponse.json(
