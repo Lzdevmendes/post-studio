@@ -11,8 +11,11 @@ const ENDPOINTS: Record<
   { url: string; defaultModel: string; needsKey: boolean; label: string }
 > = {
   pollinations: {
+    // "openai-fast" (gpt-4o-mini) responde direto; o "openai" padrão é um
+    // modelo de reasoning que gasta o orçamento de tokens "pensando" e devolve
+    // o JSON truncado/vazio.
     url: "https://text.pollinations.ai/openai",
-    defaultModel: "openai",
+    defaultModel: "openai-fast",
     needsKey: false,
     label: "Pollinations",
   },
@@ -87,25 +90,38 @@ ${SHAPE}`;
     headers["X-Title"] = "Post Studio";
   }
 
-  const res = await fetch(cfg.url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: model || cfg.defaultModel,
-      temperature: 0.9,
-      max_tokens: 8192,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: `Notícias da semana:\n\n${newsList}\n\nMonte os 7 posts.` },
-      ],
-    }),
-  });
+  const reqBody: Record<string, unknown> = {
+    model: model || cfg.defaultModel,
+    temperature: 0.9,
+    max_tokens: 8192,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: `Notícias da semana:\n\n${newsList}\n\nMonte os 7 posts.` },
+    ],
+  };
+  // O único modelo grátis do Pollinations (openai-fast / gpt-oss) é de
+  // reasoning: sem isso ele gasta o orçamento de tokens "pensando" e devolve
+  // o JSON cortado. "low" deixa ~0 reasoning e a resposta completa.
+  if (provider === "pollinations") reqBody.reasoning_effort = "low";
+  const payload = JSON.stringify(reqBody);
 
-  if (!res.ok) {
+  let data: any;
+  // Tier grátis cai com 429/5xx de vez em quando — tenta de novo algumas vezes.
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(cfg.url, { method: "POST", headers, body: payload });
+    if (res.ok) {
+      data = await res.json();
+      break;
+    }
     const body = await res.text();
     if (res.status === 401 || /invalid api key|unauthorized/i.test(body)) {
       throw new Error(`Chave do ${cfg.label} inválida. Confira nas configurações.`);
+    }
+    const transient = res.status === 429 || res.status >= 500;
+    if (transient && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
     }
     if (res.status === 429) {
       throw new Error(`Limite do tier grátis do ${cfg.label} agora. Espere um pouco e tente de novo.`);
@@ -113,9 +129,16 @@ ${SHAPE}`;
     throw new Error(`${cfg.label} ${res.status}: ${body.slice(0, 200)}`);
   }
 
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error(`${cfg.label} não retornou conteúdo`);
+  const choice = data?.choices?.[0];
+  const text = choice?.message?.content;
+  if (!text) {
+    if (choice?.finish_reason === "length") {
+      throw new Error(
+        `${cfg.label} cortou a resposta no limite de tokens. Tente de novo ou troque de motor.`,
+      );
+    }
+    throw new Error(`${cfg.label} não retornou conteúdo. Tente de novo ou troque de motor.`);
+  }
   const plan = JSON.parse(extractJson(text)) as Plan;
   if (!Array.isArray(plan.days) || plan.days.length < 7) {
     throw new Error(`Esperava 7 posts, veio ${plan.days?.length}`);

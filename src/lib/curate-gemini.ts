@@ -35,40 +35,50 @@ export async function curateGemini(
 A partir das notícias da semana, monte 7 posts (um por dia, seg-dom) úteis, com opinião e voz autêntica de dev. Varie os temas.
 ${SHAPE}`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: `Notícias da semana:\n\n${newsList}\n\nMonte os 7 posts.` }],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          maxOutputTokens: 8192,
-          temperature: 0.9,
-        },
-      }),
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: `Notícias da semana:\n\n${newsList}\n\nMonte os 7 posts.` }],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      maxOutputTokens: 8192,
+      temperature: 0.9,
     },
-  );
+  });
 
-  if (!res.ok) {
+  let data: any;
+  // O Gemini grátis devolve 503 UNAVAILABLE (e às vezes 429) quando está
+  // sobrecarregado — costuma passar em segundos, então tenta de novo.
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: payload },
+    );
+    if (res.ok) {
+      data = await res.json();
+      break;
+    }
     const body = await res.text();
     if (/API_KEY_INVALID|API key not valid/i.test(body)) {
       throw new Error("Chave do Gemini inválida. Pegue uma grátis em aistudio.google.com → Get API key.");
     }
+    const transient = res.status === 429 || res.status >= 500;
+    if (transient && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
+    }
     if (res.status === 429) {
       throw new Error("Limite do tier grátis do Gemini atingido agora. Espere um pouco e tente de novo.");
     }
+    if (res.status === 503) {
+      throw new Error("Gemini sobrecarregado agora (503). Tente de novo em instantes ou troque de motor.");
+    }
     throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`);
   }
-
-  const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini não retornou conteúdo");
   const plan = JSON.parse(text) as Plan;
