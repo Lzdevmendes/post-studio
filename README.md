@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Post Studio
 
-## Getting Started
+App web (Next.js 16) onde qualquer pessoa cria uma semana de posts de tech para o
+Instagram usando as **próprias chaves** do Claude e da Luma.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+login (Supabase) → cadastra chaves → "Gerar a semana"
+  → notícias (HN + dev.to) → Claude escreve 7 posts → Luma cria a arte
+  → next/og compõe o texto sobre a arte (sem layout quebrado)
+  → grade com download + copiar legenda → tudo salvo no histórico
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Rodar local
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm install
+pnpm dev          # http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+O `.env.local` já está preenchido com o projeto Supabase (`post-studio`, região São Paulo).
 
-## Learn More
+## Como funciona
 
-To learn more about Next.js, take a look at the following resources:
+- **Auth + dados:** Supabase (Postgres + RLS). Cada usuário tem perfil (marca + chaves)
+  e seu próprio histórico de posts. Um usuário nunca vê dados de outro (RLS testada).
+- **Chaves:** cada usuário cadastra a sua chave do Claude e da Luma — ficam salvas só
+  na conta dele e são usadas para chamar as APIs em nome dele. Custo zero pro dono do app.
+- **Render:** `/api/og` usa `next/og` (Satori) para compor o texto sobre a arte da Luma,
+  num template travado (1080×1350) — nunca quebra.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| rota | função |
+|---|---|
+| `/login` | entrar / criar conta |
+| `/` | estúdio (gerar a semana) |
+| `/historico` | banco de posts do usuário |
+| `/api/plan` | notícias + Claude escreve os 7 posts |
+| `/api/luma` | gera a arte (Photon) |
+| `/api/og` | compõe o PNG final |
+| `/api/profile` `/api/posts` | salvam perfil/posts no Supabase |
+| `src/proxy.ts` | renova a sessão e protege as rotas (Next 16 usa `proxy`, não `middleware`) |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Publicar na Vercel
 
-## Deploy on Vercel
+1. Suba o projeto num repositório (GitHub) e importe na [Vercel](https://vercel.com/new).
+2. Em **Settings → Environment Variables**, adicione:
+   - `NEXT_PUBLIC_SUPABASE_URL` = `https://kficzgoivlzjfqlyzxbn.supabase.co`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` = `sb_publishable_9BHoSgEFJ89JgCtSZY2CYA_smuiar7p`
+3. Deploy. Vai sair em `https://seu-projeto.vercel.app`.
+4. No painel do **Supabase → Authentication → URL Configuration**: ponha a URL da Vercel
+   em **Site URL** e adicione-a em **Redirect URLs** (pros links de confirmação de e-mail).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Cadastro de usuários (importante)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+A **confirmação de e-mail está LIGADA** (padrão): ao criar conta, o usuário recebe um
+e-mail para confirmar antes de entrar. Para seus parentes/amigos entrarem na hora, você
+pode desligar em **Supabase → Authentication → Providers → Email → "Confirm email"**
+(menos seguro, porém sem fricção). Para volume real de e-mails, configure um SMTP próprio
+em Authentication → Emails (o SMTP gratuito do Supabase tem limite baixo).
+
+## Stack
+
+Next.js 16 (App Router, Turbopack) · Tailwind v4 · Supabase (Auth + Postgres + RLS) ·
+`@anthropic-ai/sdk` · Luma Dream Machine (Photon) · `next/og` (Satori).
