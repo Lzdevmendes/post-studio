@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import Studio from "@/components/Studio";
+import Studio, { type Template } from "@/components/Studio";
+import type { ArtStyle } from "@/lib/pollinations";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -11,7 +12,9 @@ export default async function Home() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("handle, niche, anthropic_key, luma_key, gemini_key, model, text_provider, image_provider")
+    .select(
+      "handle, niche, anthropic_key, luma_key, gemini_key, model, text_provider, image_provider, groq_key, openrouter_key, hf_key, cf_account_id, cf_token, art_style, template",
+    )
     .eq("id", user.id)
     .single();
 
@@ -34,6 +37,13 @@ export default async function Home() {
           model: profile?.model ?? "claude-opus-4-8",
           textProvider,
           imageProvider,
+          groqKey: profile?.groq_key ?? "",
+          openrouterKey: profile?.openrouter_key ?? "",
+          hfKey: profile?.hf_key ?? "",
+          cfAccountId: profile?.cf_account_id ?? "",
+          cfToken: profile?.cf_token ?? "",
+          artStyle: (profile?.art_style ?? "abstrato") as ArtStyle,
+          template: (profile?.template ?? "padrao") as Template,
         }}
       />
       <footer className="text-center text-xs text-muted py-10 mono">

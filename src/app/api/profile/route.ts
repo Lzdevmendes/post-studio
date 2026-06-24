@@ -21,6 +21,13 @@ export async function POST(req: Request) {
     "text_provider",
     "image_provider",
     "gemini_key",
+    "groq_key",
+    "openrouter_key",
+    "hf_key",
+    "cf_account_id",
+    "cf_token",
+    "art_style",
+    "template",
   ]) {
     if (body[k] !== undefined) patch[k] = body[k];
   }

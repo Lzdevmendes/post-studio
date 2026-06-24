@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { pollinationsUrl, ART_STYLES, type ArtStyle } from "@/lib/pollinations";
 import type { Plan, Post } from "@/lib/types";
 
-type Template = "padrao" | "centro" | "citacao";
+export type Template = "padrao" | "centro" | "citacao";
 const TEMPLATES: { id: Template; label: string }[] = [
   { id: "padrao", label: "Padrão — manchete embaixo" },
   { id: "centro", label: "Centralizado" },
@@ -26,16 +26,13 @@ type Settings = {
   geminiKey: string;
   lumaKey: string;
   model: string;
-};
-
-// Chaves dos motores grátis novos — guardadas só na sessão (sem coluna no
-// banco ainda). Persisti-las exige uma migração no Supabase.
-type FreeKeys = {
   groqKey: string;
   openrouterKey: string;
   hfKey: string;
   cfAccountId: string;
   cfToken: string;
+  artStyle: ArtStyle;
+  template: Template;
 };
 
 type GenPost = Post & {
@@ -56,43 +53,29 @@ export default function Studio({ email, initial }: { email: string; initial: Set
   const [theme, setTheme] = useState("");
   const [posts, setPosts] = useState<GenPost[]>([]);
   const [error, setError] = useState("");
-  const [artStyle, setArtStyle] = useState<ArtStyle>("abstrato");
-  const [template, setTemplate] = useState<Template>("padrao");
-  const [freeKeys, setFreeKeys] = useState<FreeKeys>({
-    groqKey: "",
-    openrouterKey: "",
-    hfKey: "",
-    cfAccountId: "",
-    cfToken: "",
-  });
-
   const textReady =
     settings.textProvider === "pollinations"
       ? true
       : settings.textProvider === "gemini"
         ? !!settings.geminiKey
         : settings.textProvider === "groq"
-          ? !!freeKeys.groqKey
+          ? !!settings.groqKey
           : settings.textProvider === "openrouter"
-            ? !!freeKeys.openrouterKey
+            ? !!settings.openrouterKey
             : !!settings.anthropicKey;
   const imageReady =
     settings.imageProvider === "pollinations"
       ? true
       : settings.imageProvider === "huggingface"
-        ? !!freeKeys.hfKey
+        ? !!settings.hfKey
         : settings.imageProvider === "cloudflare"
-          ? !!freeKeys.cfAccountId && !!freeKeys.cfToken
+          ? !!settings.cfAccountId && !!settings.cfToken
           : !!settings.lumaKey;
   const ready = textReady && imageReady;
   const [openSettings, setOpenSettings] = useState(!ready);
 
   function set<K extends keyof Settings>(k: K, v: Settings[K]) {
     setSettings((s) => ({ ...s, [k]: v }));
-  }
-
-  function setFree<K extends keyof FreeKeys>(k: K, v: FreeKeys[K]) {
-    setFreeKeys((s) => ({ ...s, [k]: v }));
   }
 
   async function persist() {
@@ -108,6 +91,13 @@ export default function Studio({ email, initial }: { email: string; initial: Set
         anthropic_key: settings.anthropicKey,
         gemini_key: settings.geminiKey,
         luma_key: settings.lumaKey,
+        groq_key: settings.groqKey,
+        openrouter_key: settings.openrouterKey,
+        hf_key: settings.hfKey,
+        cf_account_id: settings.cfAccountId,
+        cf_token: settings.cfToken,
+        art_style: settings.artStyle,
+        template: settings.template,
       }),
     });
   }
@@ -153,9 +143,9 @@ export default function Studio({ email, initial }: { email: string; initial: Set
           geminiKey: settings.geminiKey,
           freeKey:
             settings.textProvider === "groq"
-              ? freeKeys.groqKey
+              ? settings.groqKey
               : settings.textProvider === "openrouter"
-                ? freeKeys.openrouterKey
+                ? settings.openrouterKey
                 : "",
           model: settings.textProvider === "claude" ? settings.model : undefined,
           handle: settings.handle,
@@ -179,7 +169,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
           const post = initialPosts[i];
           let bg: string;
           if (settings.imageProvider === "pollinations") {
-            bg = pollinationsUrl(post.image_prompt, i + 1, artStyle);
+            bg = pollinationsUrl(post.image_prompt, i + 1, settings.artStyle);
           } else if (settings.imageProvider === "luma") {
             const lumaRes = await fetch("/api/luma", {
               method: "POST",
@@ -197,9 +187,9 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               body: JSON.stringify({
                 provider: settings.imageProvider,
                 prompt: post.image_prompt,
-                hfKey: freeKeys.hfKey,
-                cfAccountId: freeKeys.cfAccountId,
-                cfToken: freeKeys.cfToken,
+                hfKey: settings.hfKey,
+                cfAccountId: settings.cfAccountId,
+                cfToken: settings.cfToken,
               }),
             });
             const img = await imgRes.json();
@@ -217,7 +207,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               dia: post.dia,
               handle: settings.handle,
               bg,
-              tpl: template,
+              tpl: settings.template,
             }),
           });
           if (!ogRes.ok) throw new Error("Falha ao compor a arte");
@@ -309,11 +299,11 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               </Field>
             ) : settings.textProvider === "groq" ? (
               <Field label="Chave do Groq (grátis)" hint="console.groq.com → API Keys">
-                <input type={showKeys ? "text" : "password"} value={freeKeys.groqKey} onChange={(e) => setFree("groqKey", e.target.value)} placeholder="gsk_..." className="input" />
+                <input type={showKeys ? "text" : "password"} value={settings.groqKey} onChange={(e) => set("groqKey", e.target.value)} onBlur={persist} placeholder="gsk_..." className="input" />
               </Field>
             ) : settings.textProvider === "openrouter" ? (
               <Field label="Chave do OpenRouter (grátis)" hint="openrouter.ai → Keys · usa modelos :free">
-                <input type={showKeys ? "text" : "password"} value={freeKeys.openrouterKey} onChange={(e) => setFree("openrouterKey", e.target.value)} placeholder="sk-or-..." className="input" />
+                <input type={showKeys ? "text" : "password"} value={settings.openrouterKey} onChange={(e) => set("openrouterKey", e.target.value)} onBlur={persist} placeholder="sk-or-..." className="input" />
               </Field>
             ) : (
               <Field label="Chave do Claude (Anthropic)" hint="console.claude.com → API keys (precisa de créditos)">
@@ -336,15 +326,15 @@ export default function Studio({ email, initial }: { email: string; initial: Set
               </Field>
             ) : settings.imageProvider === "huggingface" ? (
               <Field label="Token do Hugging Face (grátis)" hint="huggingface.co/settings/tokens">
-                <input type={showKeys ? "text" : "password"} value={freeKeys.hfKey} onChange={(e) => setFree("hfKey", e.target.value)} placeholder="hf_..." className="input" />
+                <input type={showKeys ? "text" : "password"} value={settings.hfKey} onChange={(e) => set("hfKey", e.target.value)} onBlur={persist} placeholder="hf_..." className="input" />
               </Field>
             ) : settings.imageProvider === "cloudflare" ? (
               <>
                 <Field label="Account ID do Cloudflare" hint="dash.cloudflare.com → Workers AI">
-                  <input value={freeKeys.cfAccountId} onChange={(e) => setFree("cfAccountId", e.target.value)} placeholder="ex.: 0a1b2c..." className="input" />
+                  <input value={settings.cfAccountId} onChange={(e) => set("cfAccountId", e.target.value)} onBlur={persist} placeholder="ex.: 0a1b2c..." className="input" />
                 </Field>
                 <Field label="API Token do Cloudflare (grátis)" hint="permissão Workers AI">
-                  <input type={showKeys ? "text" : "password"} value={freeKeys.cfToken} onChange={(e) => setFree("cfToken", e.target.value)} placeholder="token..." className="input" />
+                  <input type={showKeys ? "text" : "password"} value={settings.cfToken} onChange={(e) => set("cfToken", e.target.value)} onBlur={persist} placeholder="token..." className="input" />
                 </Field>
               </>
             ) : (
@@ -354,7 +344,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
             {/* Estilo de arte — grátis, sem chave (só no Pollinations) */}
             {settings.imageProvider === "pollinations" && (
               <Field label="Estilo da arte" hint="Grátis · muda o visual do fundo">
-                <select value={artStyle} onChange={(e) => setArtStyle(e.target.value as ArtStyle)} className="input">
+                <select value={settings.artStyle} onChange={(e) => set("artStyle", e.target.value as ArtStyle)} onBlur={persist} className="input">
                   {ART_STYLES.map((s) => (
                     <option key={s.id} value={s.id}>{s.label}</option>
                   ))}
@@ -364,7 +354,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
 
             {/* Template do post — layout do texto, 100% código */}
             <Field label="Template do post" hint="Como o texto é diagramado">
-              <select value={template} onChange={(e) => setTemplate(e.target.value as Template)} className="input">
+              <select value={settings.template} onChange={(e) => set("template", e.target.value as Template)} onBlur={persist} className="input">
                 {TEMPLATES.map((t) => (
                   <option key={t.id} value={t.id}>{t.label}</option>
                 ))}
@@ -395,8 +385,8 @@ export default function Studio({ email, initial }: { email: string; initial: Set
             <p className="text-xs text-muted sm:col-span-2">
               Modo 100% sem chave: Pollinations no texto + Pollinations na imagem — não
               precisa cadastrar nada. Gemini, Groq, OpenRouter, Hugging Face e Cloudflare
-              também são grátis (só pedem uma chave grátis). Chaves do Claude/Gemini/Luma
-              ficam salvas na sua conta; as dos motores grátis novos valem só nesta sessão.
+              também são grátis (só pedem uma chave grátis). Todas as chaves e preferências
+              ficam salvas só na sua conta.
             </p>
           </div>
         )}
