@@ -4,8 +4,15 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { pollinationsUrl } from "@/lib/pollinations";
+import { pollinationsUrl, ART_STYLES, type ArtStyle } from "@/lib/pollinations";
 import type { Plan, Post } from "@/lib/types";
+
+type Template = "padrao" | "centro" | "citacao";
+const TEMPLATES: { id: Template; label: string }[] = [
+  { id: "padrao", label: "Padrão — manchete embaixo" },
+  { id: "centro", label: "Centralizado" },
+  { id: "citacao", label: "Citação" },
+];
 
 type Settings = {
   handle: string;
@@ -27,8 +34,13 @@ type GenPost = Post & {
 
 const DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"];
 
-function ogUrl(p: { headline: string; subtitle: string; dia: string }, handle: string, bg: string) {
-  const q = new URLSearchParams({ headline: p.headline, subtitle: p.subtitle, dia: p.dia, handle, bg });
+function ogUrl(
+  p: { headline: string; subtitle: string; dia: string },
+  handle: string,
+  bg: string,
+  tpl: Template,
+) {
+  const q = new URLSearchParams({ headline: p.headline, subtitle: p.subtitle, dia: p.dia, handle, bg, tpl });
   return `/api/og?${q.toString()}`;
 }
 
@@ -41,6 +53,8 @@ export default function Studio({ email, initial }: { email: string; initial: Set
   const [theme, setTheme] = useState("");
   const [posts, setPosts] = useState<GenPost[]>([]);
   const [error, setError] = useState("");
+  const [artStyle, setArtStyle] = useState<ArtStyle>("abstrato");
+  const [template, setTemplate] = useState<Template>("padrao");
 
   const textReady = settings.textProvider === "gemini" ? !!settings.geminiKey : !!settings.anthropicKey;
   const imageReady = settings.imageProvider === "pollinations" ? true : !!settings.lumaKey;
@@ -126,7 +140,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
         try {
           let bg: string;
           if (settings.imageProvider === "pollinations") {
-            bg = pollinationsUrl(initialPosts[i].image_prompt, i + 1);
+            bg = pollinationsUrl(initialPosts[i].image_prompt, i + 1, artStyle);
           } else {
             const lumaRes = await fetch("/api/luma", {
               method: "POST",
@@ -140,7 +154,7 @@ export default function Studio({ email, initial }: { email: string; initial: Set
           const done: GenPost = {
             ...initialPosts[i],
             bg,
-            ogUrl: ogUrl(initialPosts[i], settings.handle, bg),
+            ogUrl: ogUrl(initialPosts[i], settings.handle, bg, template),
             status: "done",
           };
           setPosts((prev) => prev.map((p, idx) => (idx === i ? done : p)));
@@ -244,6 +258,26 @@ export default function Studio({ email, initial }: { email: string; initial: Set
             ) : (
               <div className="hidden sm:block" />
             )}
+
+            {/* Estilo de arte — grátis, sem chave (só no Pollinations) */}
+            {settings.imageProvider === "pollinations" && (
+              <Field label="Estilo da arte" hint="Grátis · muda o visual do fundo">
+                <select value={artStyle} onChange={(e) => setArtStyle(e.target.value as ArtStyle)} className="input">
+                  {ART_STYLES.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            {/* Template do post — layout do texto, 100% código */}
+            <Field label="Template do post" hint="Como o texto é diagramado">
+              <select value={template} onChange={(e) => setTemplate(e.target.value as Template)} className="input">
+                {TEMPLATES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </Field>
 
             {settings.textProvider === "claude" && (
               <Field label="Modelo do Claude" hint="Haiku = mais barato · Opus = melhor">
